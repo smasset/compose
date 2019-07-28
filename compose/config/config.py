@@ -373,7 +373,15 @@ def check_swarm_only_config(service_dicts, compatibility=False):
     check_swarm_only_key(service_dicts, 'configs')
 
 
-def load(config_details, compatibility=False, interpolate=True):
+def filter_sections(parent_section, ignored_sections, separator='.'):
+    """Filters a list of sections to ignore based on their parent section
+    Return a list of sections under the given parent section
+    """
+    return [parts[2] for parts in (section.partition(separator) for section in ignored_sections)
+            if separator == parts[1] and parent_section == parts[0]]
+
+
+def load(config_details, compatibility=False, interpolate=True, ignored_config_keys=[]):
     """Load the configuration from a working directory and a list of
     configuration files.  Files are loaded in order, and merged on top
     of each other to create the final configuration.
@@ -390,18 +398,18 @@ def load(config_details, compatibility=False, interpolate=True):
 
     main_file = config_details.config_files[0]
     volumes = load_mapping(
-        config_details.config_files, 'get_volumes', 'Volume'
+        config_details.config_files, 'get_volumes', 'Volume', filter_sections('volumes', ignored_config_keys)
     )
     networks = load_mapping(
-        config_details.config_files, 'get_networks', 'Network'
+        config_details.config_files, 'get_networks', 'Network', filter_sections('networks', ignored_config_keys)
     )
     secrets = load_mapping(
-        config_details.config_files, 'get_secrets', 'Secret', config_details.working_dir
+        config_details.config_files, 'get_secrets', 'Secret', config_details.working_dir, filter_sections('secrets', ignored_config_keys)
     )
     configs = load_mapping(
-        config_details.config_files, 'get_configs', 'Config', config_details.working_dir
+        config_details.config_files, 'get_configs', 'Config', config_details.working_dir, filter_sections('configs', ignored_config_keys)
     )
-    service_dicts = load_services(config_details, main_file, compatibility)
+    service_dicts = load_services(config_details, main_file, compatibility, filter_sections('services', ignored_config_keys))
 
     if main_file.version != V1:
         for service_dict in service_dicts:
@@ -414,12 +422,12 @@ def load(config_details, compatibility=False, interpolate=True):
     return Config(version, service_dicts, volumes, networks, secrets, configs)
 
 
-def load_mapping(config_files, get_func, entity_type, working_dir=None):
+def load_mapping(config_files, get_func, entity_type, working_dir=None, ignored_config_keys=[]):
     mapping = {}
 
     for config_file in config_files:
         for name, config in getattr(config_file, get_func)().items():
-            mapping[name] = config or {}
+            mapping[name] = filter_ignored_keys(config or {}, ignored_config_keys)
             if not config:
                 continue
 
@@ -457,8 +465,8 @@ def filter_ignored_keys(dict={}, keys_to_ignore=[]):
     return {key: dict[key] for key in dict if key not in keys_to_ignore}
 
 
-def load_services(config_details, config_file, compatibility=False):
-    def build_service(service_name, service_dict, service_names):
+def load_services(config_details, config_file, compatibility=False, ignored_keys=[]):
+    def build_service(service_name, service_dict, service_names, ignored_config_keys=[]):
         service_config = ServiceConfig.with_abs_paths(
             config_details.working_dir,
             config_file.filename,
@@ -467,7 +475,7 @@ def load_services(config_details, config_file, compatibility=False):
         resolver = ServiceExtendsResolver(
             service_config, config_file, environment=config_details.environment
         )
-        service_dict = process_service(resolver.run())
+        service_dict = filter_ignored_keys(process_service(resolver.run()), ignored_config_keys)
 
         service_config = service_config._replace(config=service_dict)
         validate_service(service_config, service_names, config_file)
@@ -480,10 +488,10 @@ def load_services(config_details, config_file, compatibility=False):
         )
         return service_dict
 
-    def build_services(service_config):
+    def build_services(service_config, ignored_config_keys=[]):
         service_names = service_config.keys()
         return sort_service_dicts([
-            build_service(name, service_dict, service_names)
+            build_service(name, service_dict, service_names, ignored_config_keys)
             for name, service_dict in service_config.items()
         ])
 
@@ -505,7 +513,7 @@ def load_services(config_details, config_file, compatibility=False):
     for next_config in service_configs[1:]:
         service_config = merge_services(service_config, next_config)
 
-    return build_services(service_config)
+    return build_services(service_config, ignored_config_keys)
 
 
 def interpolate_config_section(config_file, config, section, environment):
