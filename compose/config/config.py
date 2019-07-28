@@ -453,6 +453,10 @@ def validate_external(entity_type, name, config, version):
                 entity_type, name, ', '.join(k for k in config if k != 'external')))
 
 
+def filter_ignored_keys(dict={}, keys_to_ignore=[]):
+    return {key: dict[key] for key in dict if key not in keys_to_ignore}
+
+
 def load_services(config_details, config_file, compatibility=False):
     def build_service(service_name, service_dict, service_names):
         service_config = ServiceConfig.with_abs_paths(
